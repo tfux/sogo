@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #import <Contacts/NGVCard+SOGo.h>
 
 #import <SOGo/NSString+Utilities.h>
+#import <SOGo/NSCalendarDate+SOGo.h>
 
 #include "NSDate+ActiveSync.h"
 #include "NSString+ActiveSync.h"
@@ -50,7 +51,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 @implementation NGVCard (ActiveSync)
 
 //
-// This function is called for each elements which can be ghosted according to specs. 
+// This function is called for each elements which can be ghosted according to specs.
 // https://msdn.microsoft.com/en-us/library/gg650908%28v=exchg.80%29.aspx
 //
 - (BOOL) _isGhosted: (NSString *) element
@@ -65,35 +66,292 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   if (!supportedElements)
     return NO;
 
-  // If the client includes an empty Supported element in the initial Sync command request for 
+  // If the client includes an empty Supported element in the initial Sync command request for
   // a folder, then all elements that can be ghosted are considered ghosted.
   if (![supportedElements count])
     return YES;
 
-  // If the client includes a Supported element that contains child elements in the initial 
-  // Sync command request for a folder, then each child element of that Supported element is 
-  // considered not ghosted. All elements that can be ghosted that are not included as child 
-  // elements of the Supported element are considered ghosted. 
-  if (!([supportedElements indexOfObject: element] == NSNotFound))
+  // If the client includes a Supported element that contains child elements in the initial
+  // Sync command request for a folder, then each child element of that Supported element is
+  // considered not ghosted. All elements that can be ghosted that are not included as child
+  // elements of the Supported element are considered ghosted.
+  if (([supportedElements indexOfObject: element] == NSNotFound))
     return YES;
 
   return NO;
 }
 
+//
+// Return an element having type typePreferred otherwise return the element at index atIndex.
+//
+- (CardElement *) _phoneElementOfType: (NSString *) aType
+                              atIndex: (NSUInteger) idx
+                        typePreferred: (NSString *) aTypePreferred
+                            excluding: (NSString *) aTypeToExclude
+{
+  NSArray *elements, *a;
+  NSMutableArray *elements_found;
+  CardElement *element,*ce;
+  BOOL found;
+  int i, ii;
+
+  elements_found = [NSMutableArray array];
+
+  elements = [self childrenWithTag: @"tel"
+                      andAttribute: @"type" havingValue: aType];
+
+  for (i = 0; i < [elements count]; i++)
+    {
+      ce = [elements objectAtIndex: i];
+
+      if (aTypeToExclude)
+        {
+          found = NO;
+          a = [aTypeToExclude componentsSeparatedByString: @","];
+
+          for (ii = 0; ii < [a count]; ii++)
+            {
+              if ([ce hasAttribute: @"type" havingValue: [a objectAtIndex: ii]])
+                {
+                  found = YES;
+                  break;
+                }
+            }
+
+            if (found)
+              continue;
+        }
+
+      if (aTypePreferred && [ce hasAttribute: @"type" havingValue: aTypePreferred])
+        return ce;
+      else
+        [elements_found addObject: ce];
+    }
+
+  if (![elements count] || !([elements_found count] > idx))
+    {
+      element = [CardElement elementWithTag: @"tel"];
+      [element addType: aType];
+      if (aTypePreferred)
+        [element addType: aTypePreferred];
+      [self addChild: element];
+      return element;
+    }
+  else
+    {
+      return [elements_found objectAtIndex:idx];
+    }
+}
+
+
+//
+// Return the phone number  having type typePreferred otherwise return the element at index atIndex.
+//
+- (NSString *) _phoneNumberOfType: (NSString *) aType
+                          atIndex: (NSUInteger) idx
+                    typePreferred: (NSString *) aTypePreferred
+                        excluding: (NSString *) aTypeToExclude
+{
+  NSArray *elements, *a;
+  NSMutableArray *elements_found;
+  CardElement *ce;
+  BOOL found;
+  int i, ii;
+
+  elements_found = [NSMutableArray array];
+
+  elements = [self childrenWithTag: @"tel"
+                      andAttribute: @"type" havingValue: aType];
+
+  for (i = 0; i < [elements count]; i++)
+    {
+      ce = [elements objectAtIndex: i];
+
+      if (aTypeToExclude)
+        {
+          found = NO;
+          a = [aTypeToExclude componentsSeparatedByString: @","];
+
+          for (ii = 0; ii < [a count]; ii++)
+            {
+              if ([ce hasAttribute: @"type" havingValue: [a objectAtIndex: ii]])
+                {
+                  found = YES;
+                  break;
+                }
+            }
+
+            if (found)
+              continue;
+        }
+
+      if (aTypePreferred && [ce hasAttribute: @"type" havingValue: aTypePreferred])
+        return [ce flattenedValuesForKey: @""];
+      else
+        [elements_found addObject: ce];
+     }
+
+  if ([elements_found count] > idx)
+     return [[elements_found objectAtIndex:idx] flattenedValuesForKey: @""];
+  else
+     return nil;
+}
+
+
+- (CardElement *) _elementWithTag: (NSString *) elementTag
+                          atIndex: (NSUInteger) idx
+{
+  NSArray *elements;
+  CardElement *element;
+
+  elements = [self childrenWithTag: elementTag];
+
+  if ([elements count] > idx)
+    element = [elements objectAtIndex: idx];
+  else
+    {
+      element = [CardElement elementWithTag: elementTag];
+      [self addChild: element];
+    }
+
+  return element;
+}
+
+- (BOOL) _hasElementWithTagAndLabel: (NSString *) elementTag
+                              label: (NSString *) aLabel
+{
+  NSArray *elements;
+  CardElement *element;
+  int i;
+
+  elements = [self childrenWithTag: @"X-ABLABEL"];
+
+  for (i = 0; i < [elements count]; i++)
+    {
+      element = [elements objectAtIndex: i];
+
+      if ([[element flattenedValuesForKey: @""] caseInsensitiveCompare: aLabel] == NSOrderedSame ||
+          [[element flattenedValuesForKey: @""] caseInsensitiveCompare: [NSString stringWithFormat: @"_!<%@>!_", aLabel]] == NSOrderedSame)
+        {
+          return YES;
+        }
+      else
+        continue;
+    }
+
+  return NO;
+}
+
+- (CardElement *) _elementWithTagAndLabel: (NSString *) elementTag
+                                    label: (NSString *) aLabel
+{
+  NSArray *elements;
+  CardElement *element, *lableElement;
+  NSString *groupName;
+  int i;
+
+  groupName = nil;
+
+  elements = [self childrenWithTag: @"X-ABLABEL"];
+
+  for (i = 0; i < [elements count]; i++)
+    {
+      element = [elements objectAtIndex: i];
+
+      if ([[element flattenedValuesForKey: @""] caseInsensitiveCompare: aLabel] == NSOrderedSame ||
+          [[element flattenedValuesForKey: @""] caseInsensitiveCompare: [NSString stringWithFormat: @"_!<%@>!_", aLabel]] == NSOrderedSame)
+        {
+          groupName = [element group];
+          break;
+        }
+      else
+        continue;
+    }
+
+  if (groupName)
+    {
+      elements = [self childrenWithTag: elementTag];
+
+      for (i = 0; i < [elements count]; i++)
+        {
+          element = [elements objectAtIndex: i];
+
+          if ([element group] && [[element group] caseInsensitiveCompare: groupName] == NSOrderedSame)
+            {
+              return element;
+            }
+        }
+    }
+
+  element = [CardElement elementWithTag: elementTag];
+  [element setGroup: [NSString stringWithFormat: @"SOGO%@%d", elementTag, [elements count]+1]];
+  [self addChild: element];
+
+  lableElement = [CardElement elementWithTag: @"X-ABLABEL"];
+  [lableElement setSingleValue: aLabel forKey: @""];
+  [lableElement setGroup: [NSString stringWithFormat: @"SOGO%@%d", elementTag, [elements count]+1]];
+  [self addChild: lableElement];
+
+  return element;
+}
+
+- (void) _removeElementWithTagAndLabel: (NSString *) elementTag
+                                    label: (NSString *) aLabel
+{
+  NSArray *elements;
+  CardElement *element;
+  NSString *groupName;
+  int i;
+
+  groupName = nil;
+
+  elements = [self childrenWithTag: @"X-ABLABEL"];
+
+  for (i = 0; i < [elements count]; i++)
+    {
+      element = [elements objectAtIndex: i];
+
+      if ([[element flattenedValuesForKey: @""] caseInsensitiveCompare: aLabel] == NSOrderedSame ||
+          [[element flattenedValuesForKey: @""] caseInsensitiveCompare: [NSString stringWithFormat: @"_!<%@>!_", aLabel]] == NSOrderedSame)
+        {
+          groupName = [element group];
+          [element setSingleValue: @"" forKey: @""];
+          break;
+        }
+      else
+        continue;
+    }
+
+  if (groupName)
+    {
+      elements = [self childrenWithTag: elementTag];
+
+      for (i = 0; i < [elements count]; i++)
+        {
+          element = [elements objectAtIndex: i];
+
+          if ([element group] && [[element group] caseInsensitiveCompare: groupName] == NSOrderedSame)
+            {
+              [element setSingleValue: @"" forKey: @""];
+            }
+        }
+    }
+ }
+
 - (NSString *) activeSyncRepresentationInContext: (WOContext *) context
 {
-  NSArray *emails, *addresses, *categories, *elements;
+  NSArray *emails, *addresses, *categories, *elements, *ima;
   NSMutableArray *other_addresses;
   CardElement *n, *homeAdr, *workAdr, *otherAdr;
   NSMutableString *s, *a;
-  NSString *url;
+  NSString *url, *phone;
   id o;
 
   int i;
 
   s = [NSMutableString string];
   n = [self n];
-  
+
   if ((o = [n flattenedValueAtIndex: 0 forKey: @""]))
     [s appendFormat: @"<LastName xmlns=\"Contacts:\">%@</LastName>", [o activeSyncRepresentationInContext: context]];
 
@@ -126,7 +384,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         }
       [s appendFormat: @"</Categories>"];
     }
-  
+
   elements = [self childrenWithTag: @"url"
                       andAttribute: @"type"
                        havingValue: @"work"];
@@ -135,29 +393,39 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
       url = [[elements objectAtIndex: 0] flattenedValuesForKey: @""];
       [s appendFormat: @"<WebPage xmlns=\"Contacts:\">%@</WebPage>", [url activeSyncRepresentationInContext: context]];
     }
-  
-  
-  if ((o = [[self uniqueChildWithTag: @"x-aim"] flattenedValuesForKey: @""]))
-    [s appendFormat: @"<IMAddress xmlns=\"Contacts:\">%@</IMAddress>", [o activeSyncRepresentationInContext: context]];
-  
+
+
+  ima = [self childrenWithTag: @"x-aim"];
+  if ([ima count])
+    [s appendFormat: @"<IMAddress xmlns=\"Contacts:\">%@</IMAddress>",  [[ima objectAtIndex: 0] flattenedValuesForKey: @""]];
+
+  for (i = 1; i < [ima count]; i++)
+    {
+      o = [[ima objectAtIndex: i] flattenedValuesForKey: @""];
+
+      [s appendFormat: @"<IMAddress%d xmlns=\"Contacts:\">%@</IMAddress%d>", i+1, o, i+1];
+
+      if (i == 2)
+        break;
+    }
+
   if ((o = [self nickname]))
     [s appendFormat: @"<NickName xmlns=\"Contacts:\">%@</NickName>", [o activeSyncRepresentationInContext: context]];
-  
-  
+
   if ((o = [self title]))
     [s appendFormat: @"<JobTitle xmlns=\"Contacts:\">%@</JobTitle>", [o activeSyncRepresentationInContext: context]];
-  
-  if ((o = [self preferredEMail])) 
+
+  if ((o = [self preferredEMail]))
     [s appendFormat: @"<Email1Address xmlns=\"Contacts:\">%@</Email1Address>", [o activeSyncRepresentationInContext: context]];
-  
-  
+
+
   // Secondary email addresses (2 and 3)
   emails = [self secondaryEmails];
 
   for (i = 0; i < [emails count]; i++)
     {
       o = [[emails objectAtIndex: i] flattenedValuesForKey: @""];
-      
+
       [s appendFormat: @"<Email%dAddress xmlns=\"Contacts:\">%@</Email%dAddress>", i+2, [o activeSyncRepresentationInContext: context], i+2];
 
       if (i == 1)
@@ -165,62 +433,115 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     }
 
   // Telephone numbers
-  if ((o = [self workPhone]) && [o length])
-    [s appendFormat: @"<BusinessPhoneNumber xmlns=\"Contacts:\">%@</BusinessPhoneNumber>", [o activeSyncRepresentationInContext: context]];
-  
-  if ((o = [self homePhone]) && [o length])
-    [s appendFormat: @"<HomePhoneNumber xmlns=\"Contacts:\">%@</HomePhoneNumber>", [o activeSyncRepresentationInContext: context]];
-  
-  if ((o = [self fax]) && [o length])
-    [s appendFormat: @"<BusinessFaxNumber xmlns=\"Contacts:\">%@</BusinessFaxNumber>", [o activeSyncRepresentationInContext: context]];
-  
-  if ((o = [self mobile]) && [o length])
-    [s appendFormat: @"<MobilePhoneNumber xmlns=\"Contacts:\">%@</MobilePhoneNumber>", [o activeSyncRepresentationInContext: context]];
-  
-  if ((o = [self pager]) && [o length])
-    [s appendFormat: @"<PagerNumber xmlns=\"Contacts:\">%@</PagerNumber>", [o activeSyncRepresentationInContext: context]];
+  phone = [self _phoneNumberOfType: @"work" atIndex: 0 typePreferred: @"pref" excluding: @"fax,x-assistant,x-company,x-radio"];
+  if (phone)
+    [s appendFormat: @"<BusinessPhoneNumber xmlns=\"Contacts:\">%@</BusinessPhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"work" atIndex: 1 typePreferred: nil excluding: @"fax,x-assistant,x-company,x-radio"];
+  if (phone)
+    [s appendFormat: @"<Business2PhoneNumber xmlns=\"Contacts:\">%@</Business2PhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<CompanyMain>!$_"])
+    phone = [[self _elementWithTagAndLabel: @"TEL" label: @"_$!<CompanyMain>!$_"] flattenedValuesForKey: @""];
+  else
+    phone = [self _phoneNumberOfType: @"work" atIndex: 2 typePreferred: @"x-company" excluding: @"fax,x-assistant,x-radio"];
+
+  if (phone)
+    [s appendFormat: @"<CompanyMainPhone xmlns=\"Contacts:\">%@</CompanyMainPhone>", [phone activeSyncRepresentationInContext: context]];
+
+  if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<AssistantPhone>!$_"])
+    phone = [[self _elementWithTagAndLabel: @"TEL" label: @"_$!<AssistantPhone>!$_"] flattenedValuesForKey: @""];
+  else
+  phone = [self _phoneNumberOfType: @"work" atIndex: 3 typePreferred: @"x-assistant" excluding: @"fax,x-company,x-radio"];
+
+  if (phone)
+    [s appendFormat: @"<AssistantTelephoneNumber xmlns=\"Contacts:\">%@</AssistantTelephoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"home" atIndex: 0 typePreferred: @"pref" excluding: @"fax"];
+  if (phone)
+    [s appendFormat: @"<HomePhoneNumber xmlns=\"Contacts:\">%@</HomePhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"home" atIndex: 1 typePreferred: nil excluding: @"fax"];
+  if (phone)
+    [s appendFormat: @"<Home2PhoneNumber xmlns=\"Contacts:\">%@</Home2PhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"fax" atIndex: 0 typePreferred: @"work" excluding: @"home"];
+  if (phone)
+    [s appendFormat: @"<BusinessFaxNumber xmlns=\"Contacts:\">%@</BusinessFaxNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"fax" atIndex: 0 typePreferred: @"home" excluding: @"work"];
+  if (phone)
+    [s appendFormat: @"<HomeFaxNumber xmlns=\"Contacts:\">%@</HomeFaxNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"cell" atIndex: 0 typePreferred: @"pref" excluding: nil];
+  if (phone)
+    [s appendFormat: @"<MobilePhoneNumber xmlns=\"Contacts:\">%@</MobilePhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<Car>!$_"])
+    phone = [[self _elementWithTagAndLabel: @"TEL" label: @"_$!<Car>!$_"] flattenedValuesForKey: @""];
+  else
+   {
+     phone = [self _phoneNumberOfType: @"car" atIndex: 0 typePreferred: @"pref" excluding: nil];
+     if (!phone)
+       phone = [self _phoneNumberOfType: @"cell" atIndex: 1 typePreferred: @"pref" excluding: nil];
+   }
+
+   if (phone)
+     [s appendFormat: @"<CarPhoneNumber xmlns=\"Contacts:\">%@</CarPhoneNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  phone = [self _phoneNumberOfType: @"pager" atIndex: 0 typePreferred: @"pref" excluding: nil];
+  if (phone)
+    [s appendFormat: @"<PagerNumber xmlns=\"Contacts:\">%@</PagerNumber>", [phone activeSyncRepresentationInContext: context]];
+
+  if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<Radio>!$_"])
+    phone = [[self _elementWithTagAndLabel: @"TEL" label: @"_$!<Radio>!$_"] flattenedValuesForKey: @""];
+  else
+  phone = [self _phoneNumberOfType: @"work" atIndex: 5 typePreferred: @"x-radio" excluding: @"fax,x-assistant,x-company"];
+
+  if ([phone length])
+    [s appendFormat: @"<RadioPhoneNumber xmlns=\"Contacts:\">%@</RadioPhoneNumber>", [phone activeSyncRepresentationInContext: context]];
 
   // Home Address
   addresses = [self childrenWithTag: @"adr"
                        andAttribute: @"type"
                         havingValue: @"home"];
-  
+
   if ([addresses count])
     {
       homeAdr = [addresses objectAtIndex: 0];
       a = [NSMutableString string];
-      
+
       if ((o = [homeAdr flattenedValueAtIndex: 2  forKey: @""]))
         [a appendString: [o activeSyncRepresentationInContext: context]];
 
       if ((o = [homeAdr flattenedValueAtIndex: 1  forKey: @""]) && [o length])
         [a appendFormat: @"\n%@", [o activeSyncRepresentationInContext: context]];
-      
+
       [s appendFormat: @"<HomeStreet xmlns=\"Contacts:\">%@</HomeStreet>", a];
 
       if ((o = [homeAdr flattenedValueAtIndex: 3  forKey: @""]))
         [s appendFormat: @"<HomeCity xmlns=\"Contacts:\">%@</HomeCity>", [o activeSyncRepresentationInContext: context]];
-      
+
       if ((o = [homeAdr flattenedValueAtIndex: 4  forKey: @""]))
         [s appendFormat: @"<HomeState xmlns=\"Contacts:\">%@</HomeState>", [o activeSyncRepresentationInContext: context]];
 
       if ((o = [homeAdr flattenedValueAtIndex: 5  forKey: @""]))
         [s appendFormat: @"<HomePostalCode xmlns=\"Contacts:\">%@</HomePostalCode>", [o activeSyncRepresentationInContext: context]];
-      
+
       if ((o = [homeAdr flattenedValueAtIndex: 6  forKey: @""]))
         [s appendFormat: @"<HomeCountry xmlns=\"Contacts:\">%@</HomeCountry>", [o activeSyncRepresentationInContext: context]];
     }
-  
+
   // Work Address
   addresses = [self childrenWithTag: @"adr"
                        andAttribute: @"type"
                         havingValue: @"work"];
-  
+
   if ([addresses count])
     {
       workAdr = [addresses objectAtIndex: 0];
       a = [NSMutableString string];
-      
+
       if ((o = [workAdr flattenedValueAtIndex: 2  forKey: @""]))
         [a appendString: [o activeSyncRepresentationInContext: context]];
 
@@ -228,16 +549,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         [a appendFormat: @"\n%@", [o activeSyncRepresentationInContext: context]];
 
       [s appendFormat: @"<BusinessStreet xmlns=\"Contacts:\">%@</BusinessStreet>", a];
-      
+
       if ((o = [workAdr flattenedValueAtIndex: 3  forKey: @""]))
         [s appendFormat: @"<BusinessCity xmlns=\"Contacts:\">%@</BusinessCity>", [o activeSyncRepresentationInContext: context]];
-      
+
       if ((o = [workAdr flattenedValueAtIndex: 4  forKey: @""]))
         [s appendFormat: @"<BusinessState xmlns=\"Contacts:\">%@</BusinessState>", [o activeSyncRepresentationInContext: context]];
-      
+
       if ((o = [workAdr flattenedValueAtIndex: 5  forKey: @""]))
         [s appendFormat: @"<BusinessPostalCode xmlns=\"Contacts:\">%@</BusinessPostalCode>", [o activeSyncRepresentationInContext: context]];
-      
+
       if ((o = [workAdr flattenedValueAtIndex: 6  forKey: @""]))
         [s appendFormat: @"<BusinessCountry xmlns=\"Contacts:\">%@</BusinessCountry>", [o activeSyncRepresentationInContext: context]];
     }
@@ -285,13 +606,67 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
               activeSyncRepresentationInContext: context]];
     }
 
+  // Anniversary
+  if ((o = [self uniqueChildWithTag: @"x-anniversary"]) && ![[o flattenedValuesForKey: @""] length])
+    {
+      if ((o = [self uniqueChildWithTag: @"x-ms-anniversary"]) && ![[o flattenedValuesForKey: @""] length])
+        {
+          o = nil;
+        }
+    }
+
+  if (o) {
+    o = [[o flattenedValuesForKey: @""] stringByReplacingString: @"-" withString: @""];
+    [s appendFormat: @"<Anniversary xmlns=\"Contacts:\">%@</Anniversary>",
+	    [[NSCalendarDate dateFromShortDateString: o
+		                 andShortTimeString: nil
+				         inTimeZone: [NSTimeZone timeZoneWithName: @"GMT"]]
+          activeSyncRepresentationInContext: context]];
+  }
+
+  // Assistant
+  if ((o = [self uniqueChildWithTag: @"x-assistant"]) && ![[o flattenedValuesForKey: @""] length])
+    {
+      if ((o = [self uniqueChildWithTag: @"x-ms-assistant"]) && ![[o flattenedValuesForKey: @""] length])
+        {
+          o = nil;
+        }
+    }
+
+  if (o)
+    [s appendFormat: @"<AssistantName xmlns=\"Contacts:\">%@</AssistantName>", o];
+
+  // Manager
+  if ((o = [self uniqueChildWithTag: @"x-manager"]) && ![[o flattenedValuesForKey: @""] length])
+    {
+      if ((o = [self uniqueChildWithTag: @"x-ms-manager"]) && ![[o flattenedValuesForKey: @""] length])
+        {
+          o = nil;
+        }
+    }
+
+  if (o)
+    [s appendFormat: @"<ManagerName xmlns=\"Contacts2:\">%@</ManagerName>", o];
+
+  // Spouse
+  if ((o = [self uniqueChildWithTag: @"x-spouse"]) && ![[o flattenedValuesForKey: @""] length])
+    {
+      if ((o = [self uniqueChildWithTag: @"x-ms-spouse"]) && ![[o flattenedValuesForKey: @""] length])
+        {
+          o = nil;
+        }
+    }
+
+  if (o)
+    [s appendFormat: @"<Spouse xmlns=\"Contacts:\">%@</Spouse>", o];
+
   if ((o = [self note]))
     {
       // It is very important here to NOT set <Truncated>0</Truncated> in the response,
       // otherwise it'll prevent WP8 phones from sync'ing. See #3028 for details.
       o = [o activeSyncRepresentationInContext: context];
       [s appendString: @"<Body xmlns=\"AirSyncBase:\">"];
-      [s appendFormat: @"<Type>%d</Type>", 1]; 
+      [s appendFormat: @"<Type>%d</Type>", 1];
       [s appendFormat: @"<EstimatedDataSize>%d</EstimatedDataSize>", [o length]];
       [s appendFormat: @"<Data>%@</Data>", o];
       [s appendString: @"</Body>"];
@@ -299,7 +674,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
   if ((o = [self photo]))
     [s appendFormat: @"<Picture xmlns=\"Contacts:\">%@</Picture>", o];
-  
+
   return s;
 }
 
@@ -334,6 +709,63 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   else if (![self _isGhosted: @"Birthday" inContext: context])
     {
       [self setBday: @""];
+    }
+
+  // Anniversary
+  if ((o = [theValues objectForKey: @"Anniversary"]) || ![self _isGhosted: @"Anniversary" inContext: context])
+    {
+      o = [o calendarDate];
+      if ((element = [self uniqueChildWithTag: @"x-ms-anniversary"]) && [[element flattenedValuesForKey: @""] length])
+        {
+          [element setSingleValue: [o descriptionWithCalendarFormat: @"%Y-%m-%d" timeZone: nil locale: nil] forKey: @""];
+        }
+      else
+        {
+          element = [self uniqueChildWithTag: @"x-anniversary"];
+          [element setSingleValue: [o descriptionWithCalendarFormat: @"%Y-%m-%d" timeZone: nil locale: nil] forKey: @""];
+        }
+    }
+
+  // Assistant
+  if ((o = [theValues objectForKey: @"AssistantName"]) || ![self _isGhosted: @"AssistantName" inContext: context])
+    {
+      if ((element = [self uniqueChildWithTag: @"x-ms-assistant"]) && [[element flattenedValuesForKey: @""] length])
+        {
+          [element setSingleValue: o forKey: @""];
+        }
+      else
+        {
+          element = [self uniqueChildWithTag: @"x-assistant"];
+          [element setSingleValue: o forKey: @""];
+        }
+    }
+
+  // Manager
+  if ((o = [theValues objectForKey: @"ManagerName"]) || ![self _isGhosted: @"ManagerName" inContext: context])
+    {
+      if ((element = [self uniqueChildWithTag: @"x-ms-manager"]) && [[element flattenedValuesForKey: @""] length])
+        {
+          [element setSingleValue: o forKey: @""];
+        }
+      else
+        {
+          element = [self uniqueChildWithTag: @"x-manager"];
+          [element setSingleValue: o forKey: @""];
+        }
+    }
+
+  // Spouse
+  if ((o = [theValues objectForKey: @"Spouse"]) || ![self _isGhosted: @"Spouse" inContext: context])
+    {
+      if ((element = [self uniqueChildWithTag: @"x-ms-spouse"]) && [[element flattenedValuesForKey: @""] length])
+        {
+          [element setSingleValue: o forKey: @""];
+        }
+      else
+        {
+          element = [self uniqueChildWithTag: @"x-spouse"];
+          [element setSingleValue: o forKey: @""];
+        }
     }
 
 
@@ -505,26 +937,26 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     [self setOrg: o  units: nil];
   else if (![self _isGhosted: @"CompanyName" inContext: context])
     [self setOrg: @""  units: nil];
-  
+
   // Department
   if ((o = [theValues objectForKey: @"Department"]))
     [self setOrg: nil  units: [NSArray arrayWithObjects:o,nil]];
   else if (![self _isGhosted: @"Department" inContext: context])
     [self setOrg: nil  units: [NSArray arrayWithObjects:@"",nil]];
-  
+
   // Email addresses
   if ((o = [theValues objectForKey: @"Email1Address"]) || ![self _isGhosted: @"Email1Address" inContext: context])
     {
       element = [self elementWithTag: @"email" ofType: @"work"];
       [element setSingleValue: [o pureEMailAddress] forKey: @""];
     }
-  
+
   if ((o = [theValues objectForKey: @"Email2Address"]) || ![self _isGhosted: @"Email2Address" inContext: context])
     {
       element = [self elementWithTag: @"email" ofType: @"home"];
       [element setSingleValue: [o pureEMailAddress] forKey: @""];
     }
-  
+
   // SOGo currently only supports 2 email addresses ... but AS clients might send 3
   // FIXME: revise this when the GUI revamp is done in SOGo
   if ((o = [theValues objectForKey: @"Email3Address"]) || ![self _isGhosted: @"Email3Address" inContext: context])
@@ -532,7 +964,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
       element = [self elementWithTag: @"email" ofType: @"three"];
       [element setSingleValue: [o pureEMailAddress] forKey: @""];
     }
-  
+
   // Formatted name
   // MiddleName
   // Suffix   (II)
@@ -559,23 +991,109 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
   // IM information
   if ((o = [theValues objectForKey: @"IMAddress"]) || ![self _isGhosted: @"IMAddress" inContext: context])
-    [[self uniqueChildWithTag: @"x-aim"]
-      setSingleValue: [theValues objectForKey: @"IMAddress"]
-              forKey: @""];
+    {
+      element = [self _elementWithTag: @"x-aim" atIndex: 0];
+      [element setSingleValue: [theValues objectForKey: @"IMAddress"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"IMAddress1"]) || ![self _isGhosted: @"IMAddress1" inContext: context])
+    {
+      element = [self _elementWithTag: @"x-aim" atIndex: 1];
+      [element setSingleValue: [theValues objectForKey: @"IMAddress2"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"IMAddress2"]) || ![self _isGhosted: @"IMAddress2" inContext: context])
+    {
+      element = [self _elementWithTag: @"x-aim" atIndex: 2];
+      [element setSingleValue: [theValues objectForKey: @"IMAddress3"]  forKey: @""];
+    }
 
   //
-  // Phone numbrrs
+  // Phone numbers
   //
+  // e.g.: TEL;TYPE=work:1 -> (BusinessPhoneNumber)
+  //       TEL;TYPE=work:2 -> (Business2PhoneNumber)
+  //       TEL;TYPE=work:3 -> (CompanyMainPhone)
+  //       TEL;TYPE=work:4 -> (AssistantTelephoneNumber)
+  //       TEL;TYPE=work:5 -> * not synced *
+  //
+  //       TEL;TYPE=work,pref:1 -> (BusinessPhoneNumber)
+  //       TEL;TYPE=work:2 -> (Business2PhoneNumber)
+  //       TEL;TYPE=work:3 ->  * not synced *
+  //       TEL;TYPE=work,x-company:4 -> (CompanyMainPhone)
+  //       TEL;TYPE=work,x-assistant:5 -> (AssistantTelephoneNumber)
+  //
+
   if ((o = [theValues objectForKey: @"BusinessPhoneNumber"]) || ![self _isGhosted: @"BusinessPhoneNumber" inContext: context])
     {
-      element = [self elementWithTag: @"tel" ofType: @"work"];
+      element = [self _phoneElementOfType: @"work" atIndex: 0 typePreferred: @"pref" excluding: @"fax,x-assistant,x-company,x-radio"];
       [element setSingleValue: [theValues objectForKey: @"BusinessPhoneNumber"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"Business2PhoneNumber"]) || ![self _isGhosted: @"Business2PhoneNumber" inContext: context])
+    {
+      element = [self _phoneElementOfType: @"work" atIndex: 1 typePreferred: nil excluding: @"fax,x-assistant,x-company,x-radio"];
+      [element setSingleValue: [theValues objectForKey: @"Business2PhoneNumber"] forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"CompanyMainPhone"]) || ![self _isGhosted: @"CompanyMainPhone" inContext: context])
+    {
+       if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<CompanyMain>!$_"])
+         {
+           if (o)
+             {
+               element = [self _elementWithTagAndLabel: @"TEL" label: @"_$!<CompanyMain>!$_"];
+               [element setSingleValue: o forKey: @""];
+             }
+           else
+             [self _removeElementWithTagAndLabel: @"TEL" label: @"_$!<CompanyMain>!$_"];
+         }
+       else if ([self _hasElementWithTagAndLabel: @"TEL" label: @"Company"])
+         {
+           if (o)
+             {
+               element = [self _elementWithTagAndLabel: @"TEL" label: @"Company"];
+               [element setSingleValue: o forKey: @""];
+             }
+           else
+             [self _removeElementWithTagAndLabel: @"TEL" label: @"Company"];
+         }
+       else
+         {
+           element = [self _phoneElementOfType: @"work" atIndex: 2 typePreferred: @"x-company" excluding: @"fax,x-assistant,x-radio"];
+           [element setSingleValue: o forKey: @""];
+         }
+    }
+
+  if ((o = [theValues objectForKey: @"AssistantTelephoneNumber"]) || ![self _isGhosted: @"AssistantTelephoneNumber" inContext: context])
+    {
+      if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<AssistantPhone>!$_"])
+        {
+          if (o)
+            {
+              element = [self _elementWithTagAndLabel: @"TEL" label: @"_$!<AssistantPhone>!$_"];
+              [element setSingleValue: o forKey: @""];
+            }
+          else
+            [self _removeElementWithTagAndLabel: @"TEL" label: @"_$!<AssistantPhone>!$_"];
+        }
+      else
+        {
+          element = [self _phoneElementOfType: @"work" atIndex: 3 typePreferred: @"x-assistant" excluding: @"fax,x-company,x-radio"];
+          [element setSingleValue: o forKey: @""];
+        }
     }
 
   if ((o = [theValues objectForKey: @"HomePhoneNumber"]) || ![self _isGhosted: @"HomePhoneNumber" inContext: context])
     {
-      element = [self elementWithTag: @"tel" ofType: @"home"];
+      element = [self _phoneElementOfType: @"home" atIndex: 0 typePreferred: @"pref" excluding: @"fax"];
       [element setSingleValue: [theValues objectForKey: @"HomePhoneNumber"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"Home2PhoneNumber"]) || ![self _isGhosted: @"Home2PhoneNumber" inContext: context])
+    {
+      element = [self _phoneElementOfType: @"home" atIndex: 1 typePreferred: nil excluding: @"fax"];
+      [element setSingleValue: [theValues objectForKey: @"Home2PhoneNumber"] forKey: @""];
     }
 
   if ((o = [theValues objectForKey: @"MobilePhoneNumber"]) || ![self _isGhosted: @"MobilePhoneNumber" inContext: context])
@@ -584,16 +1102,63 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
       [element setSingleValue: [theValues objectForKey: @"MobilePhoneNumber"]  forKey: @""];
     }
 
+  if ((o = [theValues objectForKey: @"CarPhoneNumber"]) || ![self _isGhosted: @"CarPhoneNumber" inContext: context])
+    {
+      element = [self elementWithTag: @"tel" ofType: @"car"];
+      if ([[element flattenedValuesForKey: @""] length])
+        [element setSingleValue: o forKey: @""];
+      else if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<Car>!$_"])
+        {
+          if (o)
+            {
+              element = [self _elementWithTagAndLabel: @"TEL" label: @"_$!<Car>!$_"];
+              [element setSingleValue: o forKey: @""];
+            }
+          else
+            [self _removeElementWithTagAndLabel: @"TEL" label: @"_$!<Car>!$_"];
+        }
+      else
+        {
+          element = [self _phoneElementOfType: @"cell" atIndex: 1 typePreferred: nil excluding: nil];
+          [element setSingleValue: o forKey: @""];
+        }
+    }
+
   if ((o = [theValues objectForKey: @"BusinessFaxNumber"]) || ![self _isGhosted: @"BusinessFaxNumber" inContext: context])
     {
-      element = [self elementWithTag: @"tel" ofType: @"fax"];
+      element = [self _phoneElementOfType: @"fax" atIndex: 0 typePreferred: @"work"  excluding: @"home"];
       [element setSingleValue: [theValues objectForKey: @"BusinessFaxNumber"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"HomeFaxNumber"]) || ![self _isGhosted: @"HomeFaxNumber" inContext: context])
+    {
+      element = [self _phoneElementOfType: @"fax" atIndex: 1 typePreferred: @"home"  excluding: @"work"];
+      [element setSingleValue: [theValues objectForKey: @"HomeFaxNumber"] forKey: @""];
     }
 
   if ((o = [theValues objectForKey: @"PagerNumber"]) || ![self _isGhosted: @"PagerNumber" inContext: context])
     {
       element = [self elementWithTag: @"tel" ofType: @"pager"];
       [element setSingleValue: [theValues objectForKey: @"PagerNumber"]  forKey: @""];
+    }
+
+  if ((o = [theValues objectForKey: @"RadioPhoneNumber"]) || ![self _isGhosted: @"RadioPhoneNumber" inContext: context])
+    {
+      if ([self _hasElementWithTagAndLabel: @"TEL" label: @"_$!<Radio>!$_"])
+        {
+          if (o)
+            {
+              element = [self _elementWithTagAndLabel: @"TEL" label: @"_$!<Radio>!$_"];
+              [element setSingleValue: o forKey: @""];
+            }
+          else
+            [self _removeElementWithTagAndLabel: @"TEL" label: @"_$!<Radio>!$_"];
+        }
+      else
+        {
+          element = [self _phoneElementOfType: @"work" atIndex: 4 typePreferred: @"x-radio" excluding: @"fax,x-assistant,x-company"];
+          [element setSingleValue: o forKey: @""];
+        }
     }
   
   // Job's title
