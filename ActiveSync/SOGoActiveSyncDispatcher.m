@@ -1596,7 +1596,6 @@ void handle_eas_terminate(int signum)
                   [s appendString: @"<Properties>"];
 
                   [s appendFormat: @"<ContentType xmlns=\"AirSyncBase:\">%@/%@</ContentType>", [[currentBodyPart partInfo] objectForKey: @"type"], [[currentBodyPart partInfo] objectForKey: @"subtype"]];
-
                   if ([[theResponse headerForKey: @"Content-Type"] isEqualToString:@"application/vnd.ms-sync.multipart"])
                     {
                       NSData *d;
@@ -2142,13 +2141,27 @@ void handle_eas_terminate(int signum)
           id currentCollection;
           
           NSDictionary *response;
-          NSString *v;
-          
+          NSMutableDictionary *srcUidCache;
+          NSString *v, *origSrcMessageId;
+
           srcFolderId = [self globallyUniqueIDToIMAPFolderName: srcFolderId  type: srcFolderType];
           dstFolderId = [self globallyUniqueIDToIMAPFolderName: dstFolderId  type: dstFolderType];
 
           currentCollection = [self collectionFromId: srcFolderId  type: srcFolderType];
           
+          origSrcMessageId = srcMessageId;
+          if ([currentCollection isInDraftsFolder])
+            {
+              srcUidCache = [srcFolderMetadata objectForKey: @"UidCache"];
+              if ((srcMessageId = [[srcUidCache allKeysForObject: srcMessageId] objectAtIndex: 0]))
+            {
+              if (debugOn)
+                [self logWithFormat: @"EAS - Found serverId: %@ for easId: %@", srcMessageId, origSrcMessageId];
+            }
+          else
+            srcMessageId = origSrcMessageId;
+            }
+
           client = [[currentCollection imap4Connection] client];
           [client select: srcFolderId];
           response = [client copyUid: [srcMessageId intValue]
@@ -2188,7 +2201,7 @@ void handle_eas_terminate(int signum)
               //
               // See http://msdn.microsoft.com/en-us/library/gg651088(v=exchg.80).aspx for Status response codes.
               //
-              [s appendFormat: @"<SrcMsgId>%@</SrcMsgId>", srcMessageId];
+              [s appendFormat: @"<SrcMsgId>%@</SrcMsgId>", origSrcMessageId];
               if ([prevSuccessfulMoveItemsOps objectForKey: srcMessageId])
                 {
                   // Previous move failed operation but we can recover the dstMessageId from previous request
@@ -2225,7 +2238,7 @@ void handle_eas_terminate(int signum)
                 }
               
               // Everything is alright, lets return the proper response. "Status == 3" means success.
-              [s appendFormat: @"<SrcMsgId>%@</SrcMsgId>", srcMessageId];
+              [s appendFormat: @"<SrcMsgId>%@</SrcMsgId>", origSrcMessageId];
               [s appendFormat: @"<DstMsgId>%@</DstMsgId>", dstMessageId];
               [s appendFormat: @"<Status>%d</Status>", 3];
 
@@ -4381,7 +4394,7 @@ void handle_eas_terminate(int signum)
   if (d)
     {
       if (debugOn)
-        [self logWithFormat: @"EAS - request for device %@: %@", [context objectForKey: @"DeviceId"], [[[NSString alloc] initWithData: d  encoding: NSUTF8StringEncoding] autorelease]];
+        [self logWithFormat: @"EAS - request for device %@ (%@): %@", [context objectForKey: @"DeviceId"], [context objectForKey: @"ASProtocolVersion"], [[[NSString alloc] initWithData: d  encoding: NSUTF8StringEncoding] autorelease]];
 
       builder = [[[NSClassFromString(@"DOMSaxBuilder") alloc] init] autorelease];
       dom = [builder buildFromData: d];
@@ -4411,10 +4424,10 @@ void handle_eas_terminate(int signum)
  return_response:
   [theResponse setHeader: @"14.1"  forKey: @"MS-Server-ActiveSync"];
   [theResponse setHeader: @"Sync,SendMail,SmartForward,SmartReply,GetAttachment,GetHierarchy,CreateCollection,DeleteCollection,MoveCollection,FolderSync,FolderCreate,FolderDelete,FolderUpdate,MoveItems,GetItemEstimate,MeetingResponse,Search,Settings,Ping,ItemOperations,ResolveRecipients,ValidateCert"  forKey: @"MS-ASProtocolCommands"];
-  [theResponse setHeader: @"2.5,12.0,12.1,14.0,14.1"  forKey: @"MS-ASProtocolVersions"];
+  [theResponse setHeader: @"2.5,12.0,12.1,14.0,14.1,16.0"  forKey: @"MS-ASProtocolVersions"];
 
   if (debugOn && [[theResponse headerForKey: @"Content-Type"] isEqualToString:@"application/vnd.ms-sync.wbxml"] && [[theResponse content] length] && !([(WOResponse *)theResponse status] == 500))
-    [self logWithFormat: @"EAS - response for device %@: %@", [context objectForKey: @"DeviceId"], [[[NSString alloc] initWithData: [[theResponse content] wbxml2xml] encoding: NSUTF8StringEncoding] autorelease]];
+    [self logWithFormat: @"EAS - response for device %@ (%@): %@", [context objectForKey: @"DeviceId"], [context objectForKey: @"ASProtocolVersion"], [[[NSString alloc] initWithData: [[theResponse content] wbxml2xml] encoding: NSUTF8StringEncoding] autorelease]];
 
   RELEASE(context);
   RELEASE(pool);

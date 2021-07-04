@@ -350,7 +350,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             {
               current_component = [components objectAtIndex: count] ;
 
-              if ([self isAllDay])
+              if ([self isAllDay] && [[context objectForKey: @"ASProtocolVersion"] floatValue] < 16.0)
                 {
                   recurrence_id = [NSString stringWithFormat: @"%@",
                                             [[[current_component recurrenceId] dateByAddingYears: 0 months: 0 days: 0
@@ -366,7 +366,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 }
 
               [s appendString: @"<Exception>"];
-              [s appendFormat: @"<Exception_StartTime xmlns=\"Calendar:\">%@</Exception_StartTime>", recurrence_id];
+
+              if ([[context objectForKey: @"ASProtocolVersion"] floatValue] < 16.0)
+                [s appendFormat: @"<Exception_StartTime xmlns=\"Calendar:\">%@</Exception_StartTime>", recurrence_id];
+              else
+                [s appendFormat: @"<InstanceId xmlns=\"AirSyncBase:\">%@</InstanceId>", recurrence_id];
+
               [s appendFormat: @"%@", [current_component activeSyncRepresentationInContext: context]];
               [s appendString: @"</Exception>"];
             }
@@ -376,7 +381,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
               [s appendString: @"<Exception>"];
               [s appendString: @"<Exception_Deleted>1</Exception_Deleted>"];
 
-              if ([self isAllDay])
+              if ([self isAllDay] && [[context objectForKey: @"ASProtocolVersion"] floatValue] < 16.0)
                 {
                   recurrence_id = [NSString stringWithFormat: @"%@",
                                    [[[[exdates objectAtIndex: i] asCalendarDate] dateByAddingYears: 0 months: 0 days: 0
@@ -391,7 +396,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                                                                        activeSyncRepresentationWithoutSeparatorsInContext: context]];
                 }
 
-              [s appendFormat: @"<Exception_StartTime xmlns=\"Calendar:\">%@</Exception_StartTime>", recurrence_id];
+              if ([[context objectForKey: @"ASProtocolVersion"] floatValue] < 16.0)
+                [s appendFormat: @"<Exception_StartTime xmlns=\"Calendar:\">%@</Exception_StartTime>", recurrence_id];
+              else
+                [s appendFormat: @"<InstanceId xmlns=\"AirSyncBase:\">%@</InstanceId>", recurrence_id];
+
               [s appendString: @"</Exception>"];
             }
 
@@ -403,6 +412,53 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     [s appendFormat: @"<NativeBodyType xmlns=\"AirSyncBase:\">%d</NativeBodyType>", 1];
 
   return s;
+}
+
+- (void) takeActiveSyncValuesForException:  (NSCalendarDate *) recurrenceId
+                    theValues: (NSDictionary *) theValues
+                    inContext: (WOContext *) context
+{
+
+  NSMutableArray *occurences;
+  NSCalendarDate *currentId;
+  iCalEvent *currentOccurence;
+  unsigned int count, max;
+
+
+  occurences = [NSMutableArray arrayWithArray: [[self parent] events]];
+
+  // search for an existing occurence and update it
+  max = [occurences count];
+  currentOccurence = nil;
+  count = 1;
+
+  while (count < max)
+    {
+      currentOccurence = [occurences objectAtIndex: count] ;
+      currentId = [currentOccurence recurrenceId];
+      if ([currentId compare: recurrenceId] == NSOrderedSame)
+        {
+          [currentOccurence takeActiveSyncValues: theValues  inContext: context];
+
+          break;
+        }
+
+      count++;
+      currentOccurence = nil;
+    }
+
+  // Create a new occurence if we found none to update.
+  if (!currentOccurence)
+    {
+      currentOccurence = [self mutableCopy];
+      [currentOccurence removeAllRecurrenceRules];
+      [currentOccurence removeAllExceptionRules];
+      [currentOccurence removeAllExceptionDates];
+
+      [[self parent] addToEvents: currentOccurence];
+      [currentOccurence takeActiveSyncValues: theValues  inContext: context];
+      [currentOccurence setRecurrenceId: recurrenceId];
+    }
 }
 
 //

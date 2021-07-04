@@ -55,6 +55,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #import <NGCards/iCalCalendar.h>
 #import <NGCards/iCalPerson.h>
+#import <NGCards/NSString+NGCards.h>
 
 #import <Appointments/iCalEntityObject+SOGo.h>
 #import <Appointments/SOGoAppointmentObject.h>
@@ -396,7 +397,7 @@ FIXME
             default:
               {
                  // Support Draft Mail/SMS to Exchange eMail sync.
-                 NSString *serverId;
+                 NSString *serverId, *easId;
                  NSMutableString *s;
                  NSDictionary *result;
                  NSNumber *modseq;
@@ -411,17 +412,31 @@ FIXME
                      sogoObject = [theCollection lookupName: serverId inContext: context acquire: 0];
                      [sogoObject takeActiveSyncValues: allValues  inContext: context];
 
-                     // Everything is fine, lets generate our response
+                     // We generate an UID which is used as ServerId and maps to the real ServerId which
+                     // can change later when modifying the Draft Mail on the client.
+                     // For that purpose we use uidCache as we already do for long UIDs with events/tasks/contacts.
+                     easId = [theCollection globallyUniqueObjectId];
+
                      [theBuffer appendString: @"<Add>"];
                      [theBuffer appendFormat: @"<ClientId>%@</ClientId>", clientId];
-                     [theBuffer appendFormat: @"<ServerId>%@</ServerId>", serverId];
+                     [theBuffer appendFormat: @"<ServerId>%@</ServerId>", easId];
                      [theBuffer appendFormat: @"<Status>%d</Status>", 1];
                      [theBuffer appendString: s];
                      [theBuffer appendString: @"</Add>"];
 
-
                      folderMetadata = [self _folderMetadataForKey: [self _getNameInCache: theCollection withType: theFolderType]];
                      syncCache = [folderMetadata objectForKey: @"SyncCache"];
+                     uidCache = [folderMetadata objectForKey: @"UidCache"];
+                     dateCache = [folderMetadata objectForKey: @"DateCache"];
+
+                     if (!uidCache)
+                       {
+                         [folderMetadata setObject: [NSMutableDictionary dictionary]  forKey: @"UidCache"];
+                         uidCache = [folderMetadata objectForKey: @"UidCache"];
+                       }
+
+                     [uidCache setObject: easId forKey: serverId];
+                     [dateCache setObject: [NSCalendarDate date]  forKey: serverId];
 
                      result = [sogoObject fetchParts: [NSArray arrayWithObject: @"MODSEQ"]];
                      modseq = [[[result objectForKey: @"RawResponse"] objectForKey: @"fetch"] objectForKey: @"modseq"];
@@ -581,7 +596,7 @@ FIXME
   NSString *serverId, *easId, *origServerId, *mergedFolder;
   NSArray *changes, *a, *roles;
   id aChange, o, sogoObject;
-  NSMutableDictionary *folderMetadata, *syncCache, *uidCache;
+  NSMutableDictionary *folderMetadata, *syncCache, *uidCache, *dateCache;
   SOGoUser *ownerUser;
 
   int i;
@@ -593,6 +608,7 @@ FIXME
       folderMetadata = [self _folderMetadataForKey: [self _getNameInCache: theCollection withType: theFolderType]];
       syncCache = [folderMetadata objectForKey: @"SyncCache"];
       uidCache = [folderMetadata objectForKey: @"UidCache"];
+      dateCache = [folderMetadata objectForKey: @"DateCache"];
 
       for (i = 0; i < [changes count]; i++)
         {
@@ -656,9 +672,9 @@ FIXME
             case ActiveSyncContactFolder:
               {
                 roles = [sogoObject aclsForUser:[[context activeUser] login]];
-		o = [sogoObject vCard];
+                o = [sogoObject vCard];
 
-		 // Don't update the component without proper permission
+                // Don't update the component without proper permission
                 if (([roles containsObject: SOGoRole_ObjectEditor] || [[sogoObject ownerInContext: context] isEqualToString: [[context activeUser] login]]))
 		  {
 		    [o takeActiveSyncValues: allChanges  inContext: context];
@@ -699,7 +715,16 @@ FIXME
                     // Don't update the component without proper permission
                     if ([roles containsObject: SOGoCalendarRole_ComponentModifier] || [[sogoObject ownerInContext: context] isEqualToString: [[context activeUser] login]])
 		      {
-			[o takeActiveSyncValues: allChanges  inContext: context];
+                        if ([[[(id)[aChange getElementsByTagName: @"InstanceId"] lastObject] textValue] length])
+                          {
+                            [o takeActiveSyncValuesForException: [[[(id)[aChange getElementsByTagName: @"InstanceId"] lastObject] textValue] asCalendarDate]
+						      theValues: allChanges
+						      inContext: context];
+                          }
+                        else
+                          {
+                            [o takeActiveSyncValues: allChanges  inContext: context];
+                          }
 
                         if (theFolderType == ActiveSyncEventFolder)
 			  {
@@ -735,30 +760,45 @@ FIXME
                 NSDictionary *result;
                 NSNumber *modseq;
 
-                // Process an update to a Draft Mail.
-                if ([allChanges objectForKey: @"Body"])
+                // Process an update to a draft mail.
+                if (![sogoObject deleted] && [allChanges objectForKey: @"Body"])
                   {
-                    NSString *serverId;
+                    NSString *newServerId;
                     NSMutableString *s;
 
-                    serverId = nil;
+                    newServerId = nil;
                     s = [NSMutableString string];
 
-                    serverId = [sogoObject storeMail: allChanges  inBuffer: s inContext: context];
-                    if (serverId)
+                    newServerId = [sogoObject storeMail: allChanges  inBuffer: s inContext: context];
+
+                    // Update uidCache with the mappping of easId with new serverId.
+                    [uidCache setObject: easId forKey: newServerId];
+
+                    [dateCache setObject: [NSCalendarDate date]  forKey: newServerId];
+
+                    if (debugOn)
+                      [self logWithFormat: @"EAS - Update draft mail - old uid %@, new uid %@", serverId, newServerId];
+
+                    if (newServerId)
                       {
-                        // we delete the original email - next sync will update the client with the new mail
+                        // Delete the previous version of the draft email.
                         [sogoObject delete];
+                        [syncCache removeObjectForKey: serverId];
+                        [uidCache removeObjectForKey: serverId];
+                        [dateCache removeObjectForKey: serverId];
+
+                        // Fetch new version of the draft mail.
+                        serverId = newServerId;
                         sogoObject = [theCollection lookupName: serverId inContext: context acquire: 0];
                       }
                   }
 
                 [sogoObject takeActiveSyncValues: allChanges  inContext: context];
 
+		// Avoid to sync the change back ot the client.
                 result = [sogoObject fetchParts: [NSArray arrayWithObject: @"MODSEQ"]];
                 modseq = [[[result objectForKey: @"RawResponse"] objectForKey: @"fetch"] objectForKey: @"modseq"];
-
-                if (modseq && [syncCache objectForKey: serverId])
+                if (modseq)
                   [syncCache setObject: [modseq stringValue]  forKey: serverId];
               }
             }
@@ -767,13 +807,7 @@ FIXME
 
           [theBuffer appendString: @"<Change>"];
           [theBuffer appendFormat: @"<ServerId>%@</ServerId>", origServerId];
-
-          // A body element is sent only for draft mails - status 8 will delete the mail on the client - the next sync update fetch the new mail
-          if ([allChanges objectForKey: @"Body"] && theFolderType == ActiveSyncMailFolder)
-            [theBuffer appendFormat: @"<Status>%d</Status>", 8];
-          else
-            [theBuffer appendFormat: @"<Status>%d</Status>", 1];
-
+          [theBuffer appendFormat: @"<Status>%d</Status>", 1];
           [theBuffer appendString: @"</Change>"];
         }
     }
@@ -810,6 +844,7 @@ FIXME
                          inBuffer: (NSMutableString *) theBuffer
 {
   NSString *serverId, *easId, *origServerId, *mergedFolder;
+  NSCalendarDate *recurrenceId;
   NSArray *deletions, *a, *roles;
   id aDelete, sogoObject, value;
 
@@ -838,6 +873,11 @@ FIXME
         {
           aDelete = [deletions objectAtIndex: i];
           
+          if ([[(id)[aDelete getElementsByTagName: @"InstanceId"] lastObject] textValue])
+            recurrenceId = [[[(id)[aDelete getElementsByTagName: @"InstanceId"] lastObject] textValue] asCalendarDate];
+          else
+            recurrenceId = nil;
+
           origServerId = [[(id)[aDelete getElementsByTagName: @"ServerId"] lastObject] textValue];
           easId = origServerId;
 
@@ -887,8 +927,11 @@ FIXME
               syncCache = [folderMetadata objectForKey: @"SyncCache"];
               dateCache = [folderMetadata objectForKey: @"DateCache"];
 
-              [syncCache removeObjectForKey: serverId];
-              [dateCache removeObjectForKey: serverId];
+              if (!recurrenceId)
+                {
+                  [syncCache removeObjectForKey: serverId];
+                  [dateCache removeObjectForKey: serverId];
+                }
 
               [self _setFolderMetadata: folderMetadata forKey: [self _getNameInCache: theCollection withType: theFolderType]];
 
@@ -911,9 +954,41 @@ FIXME
                     }
                   else
                     {
-                      if (!(theFolderType == ActiveSyncContactFolder))
-                        [sogoObject prepareDelete];
-                      [sogoObject delete];
+                      if (recurrenceId)
+                        {
+                          unsigned int count, max;
+                          NSMutableArray *occurences;
+                          NSCalendarDate *currentId;
+                          iCalEvent *currentOccurence;
+                          id o;
+
+                          o = [sogoObject component: NO  secure: NO];
+                          [o addToExceptionDates: recurrenceId];
+
+                          // Remove all exceptions included in the request.
+                          occurences = [NSMutableArray arrayWithArray: [[o parent] events]];
+
+                          max = [occurences count];
+                          count = 1; // skip the master event
+                          while (count < max)
+                            {
+                              currentOccurence = [occurences objectAtIndex: count] ;
+                              currentId = [currentOccurence recurrenceId];
+
+                              // Delete all occurences which are not touched (modified/added).
+                              if ([currentId compare: recurrenceId] == NSOrderedSame)
+                                [[[o parent] children] removeObject: currentOccurence];
+
+                              count++;
+                            }
+
+                          [sogoObject saveComponent: o];
+                        }
+                      else {
+                          if (!(theFolderType == ActiveSyncContactFolder))
+                          [sogoObject prepareDelete];
+                          [sogoObject delete];
+                        }
                     }
                 }
               else
@@ -949,9 +1024,24 @@ FIXME
   // The complete item is then returned to the client in a server response.
   [context setObject: @"8" forKey: @"MIMETruncation"];
 
-  o = [theCollection lookupName: [serverId sanitizedServerIdWithType: theFolderType]
-                      inContext: context
-                        acquire: NO];
+
+  if ([theCollection isInDraftsFolder])
+    {
+      NSMutableDictionary *folderMetadata, *uidCache;
+
+      folderMetadata = [self _folderMetadataForKey: [self _getNameInCache: theCollection withType: theFolderType]];
+      uidCache = [folderMetadata objectForKey: @"UidCache"];
+
+      o = [theCollection lookupName: [[[uidCache allKeysForObject: serverId] objectAtIndex: 0] sanitizedServerIdWithType: theFolderType]
+                          inContext: context
+                            acquire: NO];
+    }
+  else
+    {
+       o = [theCollection lookupName: [serverId sanitizedServerIdWithType: theFolderType]
+                           inContext: context
+                             acquire: NO];
+    }
   
   // FIXME - error handling
   [theBuffer appendString: @"<Fetch>"];
@@ -996,7 +1086,7 @@ FIXME
     {
       [folderMetadata setObject: [NSMutableDictionary dictionary]  forKey: @"SyncCache"];
       [folderMetadata setObject: [NSMutableDictionary dictionary]  forKey: @"DateCache"];
-      if (theFolderType != ActiveSyncMailFolder)
+      if (theFolderType != ActiveSyncMailFolder || (theFolderType == ActiveSyncMailFolder && [theCollection isInDraftsFolder]))
         {
           [folderMetadata setObject: [NSCalendarDate date] forKey: @"CleanoutDate"];
           [folderMetadata setObject: [NSMutableDictionary dictionary]  forKey: @"UidCache"];
@@ -1415,7 +1505,7 @@ FIXME
 
         SOGoMailObject *mailObject;
         NSArray *allMessages, *a;
-        NSString *firstUIDAdded;
+        NSString *firstUIDAdded, *easId;
 
         int j, k, return_count, highestmodseq;
         BOOL found_in_cache, initialLoadInProgress;
@@ -1643,6 +1733,33 @@ FIXME
             
             aCacheObject = [allCacheObjects objectAtIndex: k];
 
+            if (uidCache && (theFolderType == ActiveSyncMailFolder && [theCollection isInDraftsFolder]))
+              {
+                 easId = [uidCache objectForKey: [aCacheObject uid]];
+                 if (!easId && ![syncCache objectForKey: [aCacheObject uid]])
+                   {
+                     easId = [theCollection globallyUniqueObjectId];
+                     [uidCache setObject: easId forKey: [aCacheObject uid]];
+                     if (debugOn)
+                       [self logWithFormat: @"EAS - Generated new easId: %@ for serverId: %@", easId, [aCacheObject uid]];
+		   }
+		 else if (easId)
+                   {
+                     if (debugOn)
+                       [self logWithFormat: @"EAS - Using easId: %@ for serverId: %@", easId, [aCacheObject uid]];
+		   }
+		 else
+                   {
+                     easId = [aCacheObject uid];
+
+                     if (debugOn)
+                       [self logWithFormat: @"EAS - Use original serverId: %@ %@", [aCacheObject uid], easId];
+		   }
+
+              }
+            else
+              easId = [aCacheObject uid];
+
             if (debugOn)
               [self logWithFormat: @"EAS - Dealing with cacheObject: %@", aCacheObject];
 
@@ -1656,7 +1773,7 @@ FIXME
 
                     // Deleted
                     [s appendString: @"<Delete xmlns=\"AirSync:\">"];
-                    [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", [aCacheObject uid]];
+                    [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", easId];
                     [s appendString: @"</Delete>"];
                     
                     [syncCache removeObjectForKey: [aCacheObject uid]];
@@ -1678,7 +1795,7 @@ FIXME
                           [self logWithFormat: @"EAS - CHANGE!"];
 
                         [s appendString: @"<Change xmlns=\"AirSync:\">"];
-                        [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", [aCacheObject uid]];
+                        [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", easId];
                         [s appendString: @"<ApplicationData xmlns=\"AirSync:\">"];
                         [s appendString: [mailObject activeSyncRepresentationInContext: context]];
                         [s appendString: @"</ApplicationData>"];
@@ -1719,7 +1836,7 @@ FIXME
                                                    acquire: 0];
                     
                     [s appendString: @"<Add xmlns=\"AirSync:\">"];
-                    [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", [aCacheObject uid]];
+                    [s appendFormat: @"<ServerId xmlns=\"AirSync:\">%@</ServerId>", easId];
                     [s appendString: @"<ApplicationData xmlns=\"AirSync:\">"];
                     [s appendString: [mailObject activeSyncRepresentationInContext: context]];
                     [s appendString: @"</ApplicationData>"];

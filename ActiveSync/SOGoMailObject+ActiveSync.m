@@ -1341,7 +1341,6 @@ struct GlobalObjectId {
   [s appendFormat: @"<FlagStatus>%d</FlagStatus>", ([self flagged] ? 2 : 0)];
   [s appendString: @"</Flag>"];
 
-
   // Categroies/Labels
   NSEnumerator *categories;
   categories = [[[self fetchCoreInfos] objectForKey: @"flags"] objectEnumerator];
@@ -1400,6 +1399,10 @@ struct GlobalObjectId {
     nativeBodyType = 1;
 
   [s appendFormat: @"<NativeBodyType xmlns=\"AirSyncBase:\">%d</NativeBodyType>", nativeBodyType];
+
+  // IsDraft
+  if ([container isInDraftsFolder])
+    [s appendString: @"<IsDraft xmlns=\"Email2:\">1</IsDraft>"];
   
   return s;
 }
@@ -1530,6 +1533,7 @@ struct GlobalObjectId {
   int bodyType, i;
 
   identity = [[context activeUser] primaryIdentity];
+  attachments = nil;
   message_data = nil;
   bodyType = 1;
 
@@ -1675,7 +1679,7 @@ struct GlobalObjectId {
                [map setObject: [NSString stringWithFormat: @"attachment; filename=\"%@\"", [a objectForKey: @"DisplayName"]] forKey: @"content-disposition"];
 
                bodyPart = [[[NGMimeBodyPart alloc] initWithHeader:map] autorelease];
-               [bodyPart setBody: [[a objectForKey: @"Content"] stringByDecodingBase64]];
+               [bodyPart setBody: [[a objectForKey: @"Content"] dataByDecodingBase64]];
                [body addBodyPart: bodyPart];
             }
 
